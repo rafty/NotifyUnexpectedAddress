@@ -39,7 +39,10 @@ Resources:
                   - Name: prefix
                     Value: !Join [ "", [ "AWSLogs/", !Ref "AWS::AccountId", "/vpcflowlogs/", "ap-northeast-1/"]]
 
-  # VPCが複数ある場合、複数作成し、BucketのPathを分ける
+
+  # ------------------------------------------------------------
+  # If there are multiple VPCs, create the following resources.
+  # ------------------------------------------------------------
   VPCFlowLogs:
     Type: AWS::EC2::FlowLog
     Properties:
@@ -50,10 +53,12 @@ Resources:
       TrafficType: !Ref Filter
 
 
-  # AWS-Glue-Athena-QuickSightレポジトリを参考に作成
+  # -------------------------------------------------
+  # An AWS Lambda function that starts with S3 Event.
+  # AWS Lambda function that determines the domain in whitelist.
+  # -------------------------------------------------
   NslookupLambdaRole:
     Type: AWS::IAM::Role
-    #DependsOn: VPCFlowLogsS3Bucket
     Properties:
       AssumeRolePolicyDocument:
         Version: 2012-10-17
@@ -130,8 +135,6 @@ Resources:
               Resource: "*"
               Effect: Allow
 
-
-  # S3 Eventで起動するLambda
   NslookupLambda:
     Type: AWS::Serverless::Function
     Properties:
@@ -155,7 +158,7 @@ Resources:
       SourceArn: !Sub arn:aws:s3:::${S3BucketName}-${AWS::AccountId}
 
   # -----------------------------------------
-  # SSM Parameters
+  # SSM Parameters - whitelist of domain
   # -----------------------------------------
   WhiteList:
     Type: AWS::SSM::Parameter
@@ -175,13 +178,70 @@ Resources:
             - dedibox.fr
 
   # -----------------------------------------
-  # CloudWatch logs alert for Lambda
-  # 1. LogGroup
-  # 2. Metrics Filter + filter: filter pattarn: Error
-  # 3. CloudWatch Alarrm (+ filter, ->SNS Topic1)
-  # 4. SNS Topic1(->Lambda)
-  # 5. Lambda(環境変数: SNS Topic2, )
-  # 6. SNS Topic2 (subscription: mail)
+  # CloudWatch Logs
+  # -----------------------------------------
+  VpcFlowLogsAlarmLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+          LogGroupName: vpc-flow-log-alart
+
+  VpcFlowlogsAlarmLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref VpcFlowLogsAlarmLogGroup
+      LogStreamName: vpcflowlogs-stream
+
+  MetricFilterVpcFlowLogsAlarm:
+      Type: AWS::Logs::MetricFilter
+      DependsOn: VpcFlowLogsAlarmLogGroup
+      Properties:
+          LogGroupName: !Ref VpcFlowLogsAlarmLogGroup
+          FilterPattern: Alarm
+          MetricTransformations:
+              - MetricValue: "1"
+                MetricNamespace: LogMetrics
+                MetricName: VpcFlowlogsAlarm
+                DefaultValue: "0"
+
+  # -----------------------------------------
+  # Amazon SNS Topic for alarm lambda
+  # -----------------------------------------
+  VpcFlowLogsAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: VpcFlowLogsAlarm
+      TopicName: VpcFlowLogsAlarm
+      Subscription:
+          - Endpoint:
+              !GetAtt VpcFlowLogsAlarmLambda.Arn
+            Protocol: lambda
+
+  VpcFlowLogsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn: VpcFlowLogsAlarmLambda
+    Properties:
+        AlarmName: VpcFlowLogsAlarm
+        AlarmDescription: Trigger an alarm if an Alarm is recorded
+        AlarmActions:
+          - !Ref VpcFlowLogsAlarmTopic
+        MetricName: VpcFlowlogsAlarm
+        Namespace: LogMetrics
+        Period: 10
+        EvaluationPeriods: 1
+        Threshold: 0
+        Statistic: Average
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+
+  TopicPermissionToLambdaInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt VpcFlowLogsAlarmLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref VpcFlowLogsAlarmTopic
+
+  # -----------------------------------------
+  # Lambda started with CloudWatch Alarm
   # -----------------------------------------
   VpcFlowLogsLambdaExecutionRole:
       Type: AWS::IAM::Role
@@ -215,70 +275,9 @@ Resources:
                 Statement:
                 - Action:
                   - sns:Publish
-                  # Resource: !Ref NotificationSystem
                   Resource: "*"
                   Effect: Allow
 
-  VpcFlowLogsAlarmLogGroup:
-      Type: AWS::Logs::LogGroup
-      Properties:
-          LogGroupName: vpc-flow-log-alart
-
-  VpcFlowlogsAlarmLogStream:
-    Type: AWS::Logs::LogStream
-    Properties:
-      LogGroupName: !Ref VpcFlowLogsAlarmLogGroup
-      LogStreamName: vpcflowlogs-stream
-
-  MetricFilterVpcFlowLogsAlarm:
-      Type: AWS::Logs::MetricFilter
-      DependsOn: VpcFlowLogsAlarmLogGroup
-      Properties:
-          LogGroupName: !Ref VpcFlowLogsAlarmLogGroup
-          FilterPattern: Alarm
-          MetricTransformations:
-              - MetricValue: "1"
-                MetricNamespace: LogMetrics
-                MetricName: VpcFlowlogsAlarm
-                DefaultValue: "0"
-
-  VpcFlowLogsAlarmTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      DisplayName: VpcFlowLogsAlarm
-      TopicName: VpcFlowLogsAlarm
-      Subscription:
-          - Endpoint:
-              !GetAtt VpcFlowLogsAlarmLambda.Arn
-            Protocol: lambda
-
-
-  TopicPermissionToLambdaInvoke:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt VpcFlowLogsAlarmLambda.Arn
-      Action: lambda:InvokeFunction
-      Principal: sns.amazonaws.com
-      SourceArn: !Ref VpcFlowLogsAlarmTopic
-
-
-  VpcFlowLogsAlarm:
-    Type: AWS::CloudWatch::Alarm
-    DependsOn: VpcFlowLogsAlarmLambda
-    Properties:
-        AlarmName: VpcFlowLogsAlarm
-        AlarmDescription: Trigger an alarm if an Alarm is recorded
-        AlarmActions:
-          - !Ref VpcFlowLogsAlarmTopic
-        MetricName: VpcFlowlogsAlarm
-        Namespace: LogMetrics
-        Period: 10
-        EvaluationPeriods: 1
-        Threshold: 0
-        Statistic: Average
-        ComparisonOperator: GreaterThanOrEqualToThreshold
-
-  # CloudWatch Eventで起動するLambda
   VpcFlowLogsAlarmLambda:
     Type: AWS::Serverless::Function
     Properties:
@@ -292,6 +291,9 @@ Resources:
         Variables:
           SNS_TOPIC_ARN: !Ref NotificationSystem
 
+  # -----------------------------------------
+  # SNS Topic for email
+  # -----------------------------------------
   NotificationSystem:
       Type: AWS::SNS::Topic
       Properties:
