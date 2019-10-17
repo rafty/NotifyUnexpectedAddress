@@ -1,0 +1,306 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  The bucket to upload lambda function
+
+
+Parameters:
+  VpcId:
+    Description: VPC ID
+    Type: AWS::EC2::VPC::Id
+
+  S3BucketName:
+    Description: S3 Bucket Name
+    Type: String
+    Default: vpc-flow-log
+
+  Filter:
+    Type: String
+    Default: ALL
+    AllowedValues: [ ALL, ACCEPT, REJECT ]
+
+  NortificationMail:
+    Description: Vpc Flow Logs Alarm
+    Type: String
+
+Resources:
+
+  VPCFlowLogsS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Join [ "-", [ Ref: "S3BucketName" , Ref: "AWS::AccountId" ] ]
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Function: !GetAtt NslookupLambda.Arn
+            Event: "s3:ObjectCreated:*"
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: !Join [ "", [ "AWSLogs/", !Ref "AWS::AccountId", "/vpcflowlogs/", "ap-northeast-1/"]]
+
+  # VPCが複数ある場合、複数作成し、BucketのPathを分ける
+  VPCFlowLogs:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      LogDestination: !Sub arn:aws:s3:::${S3BucketName}-${AWS::AccountId}
+      LogDestinationType: s3
+      ResourceId: !Ref VpcId
+      ResourceType: VPC
+      TrafficType: !Ref Filter
+
+
+  # AWS-Glue-Athena-QuickSightレポジトリを参考に作成
+  NslookupLambdaRole:
+    Type: AWS::IAM::Role
+    #DependsOn: VPCFlowLogsS3Bucket
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+            - s3.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: s3allsinglebucket
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Action:
+              - s3:*
+              Effect: Allow
+              Resource:
+                - !Sub arn:aws:s3:::${S3BucketName}-${AWS::AccountId}
+                - Fn::Join:
+                  - ""
+                  - - !Sub arn:aws:s3:::${S3BucketName}-${AWS::AccountId}
+                    - "/*"
+        - PolicyName: s3listbuckets
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Action:
+              - s3:ListObjects
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:ListAllMyBuckets
+              Resource: "*"
+              Effect: Allow
+        - PolicyName: passrole
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Action:
+              - iam:PassRole
+              - iam:GetRole
+              Resource: !Join [ "", [ "arn:aws:iam::*:role/", !Ref "AWS::StackName" ,"*"]]
+              Effect: Allow
+        - PolicyName: cloudwatchlogsPut
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              Resource: "*"
+              Effect: Allow
+        - PolicyName: ssmread
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Action:
+              - ssm:Describe*
+              - ssm:Get*
+              - ssm:List*
+              Resource: "*"
+              Effect: Allow
+        - PolicyName: logsput
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Action:
+              - logs:Describe*
+              - logs:Put*
+              Resource: "*"
+              Effect: Allow
+
+
+  # S3 Eventで起動するLambda
+  NslookupLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt NslookupLambdaRole.Arn
+      Runtime: python3.7
+      Timeout: 300
+      Handler: lambda_function.lambda_handler
+      CodeUri: lambda/
+      Environment:
+        Variables:
+          LOGS_GROUP_NAME: !Ref VpcFlowLogsAlarmLogGroup
+          LOGS_STREAM_NAME: !Ref VpcFlowlogsAlarmLogStream
+
+  LambdaBucketPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref NslookupLambda
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub arn:aws:s3:::${S3BucketName}-${AWS::AccountId}
+
+  # -----------------------------------------
+  # SSM Parameters
+  # -----------------------------------------
+  WhiteList:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: whitelist_for_external_domain
+      Type: StringList
+      Description: Whitelist to access external Domain
+      Value:
+        Fn::Join:
+          - ","
+          - - nginx.com
+            - nginx.org
+            - fedorapeople.org
+            - fedora.ibiblio.org
+            - fedoraproject.org
+            - famillecollet.com
+            - dedibox.fr
+
+  # -----------------------------------------
+  # CloudWatch logs alert for Lambda
+  # 1. LogGroup
+  # 2. Metrics Filter + filter: filter pattarn: Error
+  # 3. CloudWatch Alarrm (+ filter, ->SNS Topic1)
+  # 4. SNS Topic1(->Lambda)
+  # 5. Lambda(環境変数: SNS Topic2, )
+  # 6. SNS Topic2 (subscription: mail)
+  # -----------------------------------------
+  VpcFlowLogsLambdaExecutionRole:
+      Type: AWS::IAM::Role
+      Properties:
+          AssumeRolePolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+              - Effect: Allow
+                Principal:
+                  Service:
+                  - lambda.amazonaws.com
+                Action:
+                  - sts:AssumeRole
+          Path: "/"
+          Policies:
+            - PolicyName: cloudwatchlogswrite
+              PolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeMetricFilters
+                  - logs:filterLogEvents
+                  Resource: "*"
+                  Effect: Allow
+            - PolicyName: snspublish
+              PolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                - Action:
+                  - sns:Publish
+                  # Resource: !Ref NotificationSystem
+                  Resource: "*"
+                  Effect: Allow
+
+  VpcFlowLogsAlarmLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+          LogGroupName: vpc-flow-log-alart
+
+  VpcFlowlogsAlarmLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref VpcFlowLogsAlarmLogGroup
+      LogStreamName: vpcflowlogs-stream
+
+  MetricFilterVpcFlowLogsAlarm:
+      Type: AWS::Logs::MetricFilter
+      DependsOn: VpcFlowLogsAlarmLogGroup
+      Properties:
+          LogGroupName: !Ref VpcFlowLogsAlarmLogGroup
+          FilterPattern: Alarm
+          MetricTransformations:
+              - MetricValue: "1"
+                MetricNamespace: LogMetrics
+                MetricName: VpcFlowlogsAlarm
+                DefaultValue: "0"
+
+  VpcFlowLogsAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: VpcFlowLogsAlarm
+      TopicName: VpcFlowLogsAlarm
+      Subscription:
+          - Endpoint:
+              !GetAtt VpcFlowLogsAlarmLambda.Arn
+            Protocol: lambda
+
+
+  TopicPermissionToLambdaInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt VpcFlowLogsAlarmLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref VpcFlowLogsAlarmTopic
+
+
+  VpcFlowLogsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn: VpcFlowLogsAlarmLambda
+    Properties:
+        AlarmName: VpcFlowLogsAlarm
+        AlarmDescription: Trigger an alarm if an Alarm is recorded
+        AlarmActions:
+          - !Ref VpcFlowLogsAlarmTopic
+        MetricName: VpcFlowlogsAlarm
+        Namespace: LogMetrics
+        Period: 10
+        EvaluationPeriods: 1
+        Threshold: 0
+        Statistic: Average
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+
+  # CloudWatch Eventで起動するLambda
+  VpcFlowLogsAlarmLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt VpcFlowLogsLambdaExecutionRole.Arn
+      Runtime: python3.7
+      Timeout: 60
+      Handler: lambda_function.lambda_handler
+      CodeUri: alarm_lambda/
+      Description: The function that parform VpcFlowLogsAlarm notrification
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref NotificationSystem
+
+  NotificationSystem:
+      Type: AWS::SNS::Topic
+      Properties:
+          DisplayName: VpcFlowLogsAlarmNorticifation
+          Subscription:
+              - Endpoint:
+                  Ref: NortificationMail
+                Protocol: email
+          TopicName: VpcFlowLogsAlarmNorticifation
+
+
+
