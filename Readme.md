@@ -24,8 +24,7 @@ These are the deployment steps until the full implementation is complete.:
 
 Locally, run following commands. 
 
-1. Set variables
-
+1. Parameter description
 UPLOADBUCKETNAME:  
 Create S3Bucket to upload Lambda Function in advance.  
 Set BucketName to the following UPLOADBUCKETNAME.  
@@ -36,6 +35,9 @@ Id of VPC that outputs VPCFlowlogs.
 MAILADDRESS:  
 Destination address for notifying Service Status.
 
+
+2. Set variables
+
 ```bash
 $ PROJECTNAME=opstools
 $ ROLENAME=vpcflowlog
@@ -44,7 +46,7 @@ $ VPCID=vpc-xxxxxxxxxxxxxxxxx
 $ MAILADDRESS=xxxxx@xxx.xxx
 ```
 
-2. Upload local artifacts  
+3. Upload local artifacts  
 ```bash
 $ aws cloudformation package \
     --template-file vpcflowlog_lambda.yml \
@@ -52,7 +54,7 @@ $ aws cloudformation package \
     --output-template-file packaged.yml
 ```
 
-3. Deploys the specified AWS CloudFormation template
+4. Deploys the specified AWS CloudFormation template
 ```bash
 $ aws cloudformation deploy \
     --stack-name $PROJECTNAME-$ROLENAME \
