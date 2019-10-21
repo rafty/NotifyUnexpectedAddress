@@ -6,7 +6,7 @@ Notify access to an unexpected external address from within the VPC.
 VPCFlowlogs is a log based on ip addresses, making it difficult to determine access to abnormal ip addresses.　　
 For this reason, this tool implements a warning function when it detects access to an ip address that is not in the whitelist.  
 
-How to use:  
+__How to use:__  
 To add a good domain by accessing the white list, add it to the WhiteList of vpcflowlog.yml.  
 
 ![](./images/vpcflowlogs.svg)  
