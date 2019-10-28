@@ -100,6 +100,9 @@ def put_log_events(message):
 
 
 def message_format(messages):
+    # '@@' is a message separator for message text.
+    # This separator process is executed by this function.
+    # ./alarm_lambda/lambda_function()
     return '@@'.join(messages)
 
 
