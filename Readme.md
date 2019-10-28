@@ -49,7 +49,7 @@ $ MAILADDRESS=xxxxx@xxx.xxx
 3. Upload local artifacts  
 ```bash
 $ aws cloudformation package \
-    --template-file vpcflowlog_lambda.yml \
+    --template-file vpcflowlog.yml \
     --s3-bucket $UPLOADBUCKETNAME \
     --output-template-file packaged.yml
 ```
