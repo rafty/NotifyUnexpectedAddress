@@ -160,10 +160,13 @@ Resources:
   # -----------------------------------------
   # SSM Parameters - whitelist of domain
   # -----------------------------------------
-  WhiteList:
+  WhiteListDomain:
+    # If you want to change domain, change the version of Name.
+    # For example, 'whitelist_for_external_domain_v2'
+    # Also, change the Name of ssm.get_parameter() of lambda/lambda_function.py
     Type: AWS::SSM::Parameter
     Properties:
-      Name: whitelist_for_external_domain
+      Name: whitelist_for_external_domain_v1
       Type: StringList
       Description: Whitelist to access external Domain
       Value:
@@ -176,6 +179,36 @@ Resources:
             - fedoraproject.org
             - famillecollet.com
             - dedibox.fr
+            - amazonaws.com
+            - knoq.nl
+
+  WhiteListCIDR:
+    # If you want to change CIDR, change the version of Name.
+    # For example, 'whitelist_for_external_domain_v2'
+    # Also, change the Name of ssm.get_parameter() of lambda/lambda_function.py
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: whitelist_cidr_v1
+      Type: StringList
+      Description: |-
+        Whitelist of CIDR
+        Microsoft: 40.xx.0.0/xx
+        Microsoft: 52.xx.0.0/xx
+        Dedicated.com: 216.105.171.0
+      Value:
+        Fn::Join:
+          - ","
+          - - 40.112.0.0/13
+            - 40.124.0.0/16
+            - 40.96.0.0/12
+            - 40.120.0.0/14
+            - 40.125.0.0/17
+            - 40.80.0.0/12
+            - 40.74.0.0/15
+            - 52.132.0.0/14
+            - 52.136.0.0/13
+            - 216.105.171.0/24
+
 
   # -----------------------------------------
   # CloudWatch Logs
